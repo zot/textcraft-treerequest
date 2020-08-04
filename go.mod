@@ -1,8 +1,6 @@
-module github.com/zot/textcraft-blockrequest
+module github.com/zot/textcraft-treerequest
 
 go 1.14
-
-replace github.com/zot/textcraft-packet => /home/bill/work/p2pmud2-projects/textcraft-packet
 
 require (
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
@@ -16,7 +14,7 @@ require (
 	github.com/ipfs/go-ipld-cbor v0.0.4 // indirect
 	github.com/ipfs/go-ipld-format v0.2.0
 	github.com/ipfs/go-log/v2 v2.0.8 // indirect
-	github.com/ipfs/go-merkledag v0.3.2
+	github.com/ipfs/go-merkledag v0.3.2 // indirect
 	github.com/ipfs/go-unixfs v0.2.4
 	github.com/libp2p/go-libp2p v0.9.6 // indirect
 	github.com/libp2p/go-libp2p-core v0.5.7
