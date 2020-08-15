@@ -58,6 +58,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"path"
 	"time"
 
 	blocks "github.com/ipfs/go-block-format"
@@ -125,7 +126,7 @@ var conf struct {
 	conSvc      chan func()
 	connections map[peer.ID]*connection
 	peers       map[peer.ID]peer.ID
-	myTree      CidTree // stored in the datastore under this host's peerID
+	myTrees     map[string]*CidTree // stored in the datastore under this host's peerID/name
 }
 
 type msgRequest interface {
@@ -136,10 +137,12 @@ type msgBase struct {
 }
 type msgRequestTree struct {
 	msgBase
+	tree string
 }
 type msgRequestContents struct {
 	msgBase
 	nodeCids [][]byte
+	tree     string
 }
 type msgResponseTree struct {
 	msgBase
@@ -171,7 +174,7 @@ func (tree CidTree) Root() cid.Cid {
 //AllCids get a map of Cid->true for all Cids in the tree
 func (tree CidTree) AllCids() (allCids map[cid.Cid]bool) {
 	allCids = make(map[cid.Cid]bool)
-	for _, aCid := range conf.myTree.Nodes {
+	for _, aCid := range tree.Nodes {
 		allCids[aCid] = true
 	}
 	return
@@ -211,19 +214,23 @@ func (msg msgBase) process(con *connection) error {
 }
 func (msg msgRequestTree) getMessageType() blockRequestMessageType { return reqCID }
 func (msg msgRequestTree) supportsRequest()                        {}
-func (msg msgRequestTree) process(con *connection) error {
+func (msg msgRequestTree) process(con *connection) (err error) {
+	var tree *CidTree
+	if tree, err = con.getTree(msg.id, msg.tree); err != nil {return}
 	return con.write(&msgResponseTree{
 		msgBase{msg.id},
-		*conf.myTree.encode(),
+		*tree.encode(),
 	})
 }
 func (msg msgRequestContents) getMessageType() blockRequestMessageType { return reqContents }
 func (msg msgRequestContents) supportsRequest()                        {}
 func (msg msgRequestContents) process(con *connection) (err error) {
 	var aCid cid.Cid
+	var tree *CidTree
 	contents := make([][]byte, 0, len(msg.nodeCids))
 	missing := make([][]byte, 0, len(msg.nodeCids))
-	allCids := conf.myTree.AllCids()
+	if tree, err = con.getTree(msg.id, msg.tree); err != nil {return}
+	allCids := tree.AllCids()
 	for _, bytes := range msg.nodeCids {
 		aCid, err = cid.Cast(bytes)
 		if err != nil {return fmt.Errorf("error decoding requested CID in msg %d: %w", msg.id, err)}
@@ -261,7 +268,7 @@ func newConnection(str network.Stream, serve bool) *connection {
 }
 
 //InitTreeRequest ipfslite provides route (dht is a routing.ValueStore) and ds
-func InitTreeRequest(protocolName string, dstor ds.Datastore, inputHost host.Host, bstor blockstore.Blockstore, getter ipld.NodeGetter, dagService ipld.DAGService, cacheSize int, root cid.Cid, initialPeers ...peer.ID) error {
+func InitTreeRequest(protocolName string, dstor ds.Datastore, inputHost host.Host, bstor blockstore.Blockstore, getter ipld.NodeGetter, dagService ipld.DAGService, cacheSize int, trees map[string]cid.Cid, initialPeers ...peer.ID) error {
 	if conf.protocol != "" {return fmt.Errorf("attempt to initialize treerequest more than once")}
 	if protocolName == "" {return fmt.Errorf("attempt to initialize treerequest with no protocol")}
 	conf.protocol = protocol.ID(protocolName)
@@ -273,22 +280,21 @@ func InitTreeRequest(protocolName string, dstor ds.Datastore, inputHost host.Hos
 	conf.conSvc = make(chan func(), 10)
 	conf.connections = make(map[peer.ID]*connection)
 	conf.peers = make(map[peer.ID]peer.ID)
-	myTreeBytes, err := dstor.Get(keyForPeer(inputHost.ID()))
+	myTreeBytes, err := dstor.Get(keyForPeer("", inputHost.ID()))
 	if err != nil && err != ds.ErrNotFound {return fmt.Errorf("error accessing storage: %w", err)}
 	if err == nil { // unmarshal tree if it was found
-		_, err = packet.Unmarshal(myTreeBytes, &conf.myTree)
+		_, err = packet.Unmarshal(myTreeBytes, &conf.myTrees)
 		if err != nil {return fmt.Errorf("error decoding tree from storage: %w", err)}
 	}
-	if root != cid.Undef && (err == ds.ErrNotFound || conf.myTree.Root() != root) {
-		//fmt.Println("Storing new tree for peer:", root)
-		err = SetTree(root)
-		if err != nil {
-			//fmt.Printf("Error storing tree: %s\n", err.Error())
-			return err
+	conf.myTrees = make(map[string]*CidTree)
+	if len(trees) > 0 {
+		for name, tree := range trees {
+			fmt.Println("###\n### Storing new tree for peer:", tree, "name:", name, "\n###")
+			err = SetTree(name, tree)
+			if err != nil {return err}
 		}
-		//fmt.Printf("Done storing tree")
-	} else if err == ds.ErrNotFound { // no tree yet
-		conf.myTree.Nodes = make(map[string]cid.Cid)
+	} else {
+		fmt.Println("###\n### Not publishing any trees\n###")
 	}
 	for _, peer := range initialPeers {
 		conf.peers[peer] = peer
@@ -335,22 +341,21 @@ func (con connection) newRequest() (msgBase, chan message) {
 }
 
 //FetchSync synchronously get the latest tree from a peer
-func FetchSync(peerID peer.ID) (*CidTree, error) {
-	result := <-Fetch(peerID)
+func FetchSync(name string, peerID peer.ID) (*CidTree, error) {
+	result := <-Fetch(name, peerID)
 	return result.Tree, result.Err
 }
 
 //Fetch get the latest tree from a peer
-func Fetch(peerID peer.ID) chan RequestResult {
+func Fetch(name string, peerID peer.ID) chan RequestResult {
 	done := make(chan RequestResult, 1) // non-blocking
 	svcSync(conf.conSvc, func() {
 		if pendingTrees[peerID] != nil { // already a pending request, get in line!
-			//fmt.Println("WAITING ON PENDING REQUEST")
 			pendingTrees[peerID] = append(pendingTrees[peerID], done)
 			return
 		}
 	})
-	tree, err := getTree(peerID) // check if we already have a tree
+	tree, err := getTree(name, peerID) // check if we already have a tree
 	knownRoot := cid.Undef
 	if err != nil && err != ds.ErrNotFound {
 		done <- RequestResult{err, nil}
@@ -359,32 +364,29 @@ func Fetch(peerID peer.ID) chan RequestResult {
 			pendingTrees[peerID] = make([]chan RequestResult, 0, 8)
 		})
 		if err == nil { // already have the tree
-			//fmt.Println("TREE IN STORAGE")
 			done <- RequestResult{err, tree}
 			knownRoot = tree.Root()
 			if peerID == conf.host.ID() {return done} // don't send a request to refresh my own peer
 		} else if peerID == conf.host.ID() {
-			//fmt.Println("OWN TREE NOT IN STORAGE")
-			done <- RequestResult{fmt.Errorf("peer does not have its own tree"), nil}
+			done <- RequestResult{fmt.Errorf("peer does not have tree %s", name), nil}
 			return done
 		} else { // not found in storage
-			//fmt.Println("REQUESTING TREE FROM PEER")
 			svcSync(conf.conSvc, func() {
 				pendingTrees[peerID] = append(pendingTrees[peerID], done)
 			})
 		}
-		go requestTree(peerID, knownRoot)
+		go requestTree(name, peerID, knownRoot)
 	}
 	return done
 }
 
 // done within tree service
-func requestTree(peerID peer.ID, knownRoot cid.Cid) {
+func requestTree(name string, peerID peer.ID, knownRoot cid.Cid) {
 	stream, err := conf.host.NewStream(context.Background(), peerID, conf.protocol)
 	if err == nil {
 		con := runProtocol(stream, false)
 		base, result := con.newRequest()
-		err = con.write(&msgRequestTree{base})
+		err = con.write(&msgRequestTree{base, name})
 		if err == nil {
 			go func() {
 				var err error
@@ -399,24 +401,23 @@ func requestTree(peerID peer.ID, knownRoot cid.Cid) {
 				}
 				if err == nil && knownRoot != tree.Root() { // fetch blocks if they changed
 					var fetched bool
-					fetched, err = con.fetchUnknownBlocks(tree)
+					fetched, err = con.fetchUnknownBlocks(name, tree)
 					if err == nil && fetched {return} // already sending output and calling cleanup
 				}
-				finished(peerID, tree, knownRoot != tree.Root(), err)
+				finished(name, peerID, tree, knownRoot != tree.Root(), err)
 			}()
 		}
 	}
 	if err != nil { // either output error or wait for result
-		finished(peerID, nil, false, err)
+		finished(name, peerID, nil, false, err)
 	}
-	return
 }
 
-func finished(peerID peer.ID, tree *CidTree, store bool, err error) {
+func finished(name string, peerID peer.ID, tree *CidTree, store bool, err error) {
 	result := RequestResult{err, tree}
 	conf.conSvc <- func() {
 		if err == nil && store { // make sure the tree is stored before sending result
-			err = tree.encode().storeTree(peerID)
+			err = tree.encode().storeTree(name, peerID)
 		}
 		chans := pendingTrees[peerID]
 		if chans != nil {
@@ -427,7 +428,7 @@ func finished(peerID peer.ID, tree *CidTree, store bool, err error) {
 		}
 	}
 }
-func (con connection) fetchUnknownBlocks(tree *CidTree) (bool, error) {
+func (con connection) fetchUnknownBlocks(name string, tree *CidTree) (bool, error) {
 	var err error
 	fetch := make([][]byte, 0, len(tree.Nodes))
 	for _, aCid := range tree.Nodes {
@@ -452,7 +453,7 @@ func (con connection) fetchUnknownBlocks(tree *CidTree) (bool, error) {
 		con.svcSync(func() {
 			base, result = con.newRequest()
 		})
-		err = con.write(&msgRequestContents{base, fetch})
+		err = con.write(&msgRequestContents{base, fetch, name})
 		if err != nil {return false, err}
 		go func() {
 			resp := <-result
@@ -464,20 +465,20 @@ func (con connection) fetchUnknownBlocks(tree *CidTree) (bool, error) {
 					block := blocks.NewBlock(item)
 					err = conf.bstor.Put(block)
 					if err != nil {
-						finished(con.stream.Conn().RemotePeer(), nil, false, err)
+						finished(name, con.stream.Conn().RemotePeer(), nil, false, err)
 						return
 					}
 					err := conf.dstor.Put(timeKey(block.Cid()), nowBytes[:])
 					if err != nil {
-						finished(con.stream.Conn().RemotePeer(), nil, false, err)
+						finished(name, con.stream.Conn().RemotePeer(), nil, false, err)
 						return
 					}
 				}
-				finished(con.stream.Conn().RemotePeer(), tree, true, nil)
+				finished(name, con.stream.Conn().RemotePeer(), tree, true, nil)
 			} else if _, ok := resp.(msgError); ok {
-				finished(con.stream.Conn().RemotePeer(), nil, false, err)
+				finished(name, con.stream.Conn().RemotePeer(), nil, false, err)
 			} else {
-				finished(con.stream.Conn().RemotePeer(), nil, false, fmt.Errorf("unexpected response: %v", msg))
+				finished(name, con.stream.Conn().RemotePeer(), nil, false, fmt.Errorf("unexpected response: %v", msg))
 			}
 		}()
 		return true, nil
@@ -497,13 +498,13 @@ func TimeForBlock(blockCid cid.Cid) (time.Time, error) {
 	return time.Unix(int64(timeVal), 0), nil
 }
 
-func keyForPeer(peerID peer.ID) ds.Key {
-	return ds.NewKey(string(conf.protocol) + "." + peerID.Pretty() + ":")
+func keyForPeer(name string, peerID peer.ID) ds.Key {
+	return ds.NewKey(string(conf.protocol) + "." + peerID.Pretty() + "/" + name + ":")
 }
 
-func getTree(peerID peer.ID) (tree *CidTree, err error) {
+func getTree(name string, peerID peer.ID) (tree *CidTree, err error) {
 	var enc encodedCidTree
-	bytes, err := conf.dstor.Get(keyForPeer(peerID))
+	bytes, err := conf.dstor.Get(keyForPeer(name, peerID))
 	if err == nil {
 		_, err = packet.Unmarshal(bytes, &enc)
 	}
@@ -511,11 +512,11 @@ func getTree(peerID peer.ID) (tree *CidTree, err error) {
 	return nil, err
 }
 
-func (tree encodedCidTree) storeTree(peerID peer.ID) (err error) {
+func (tree encodedCidTree) storeTree(name string, peerID peer.ID) (err error) {
 	var bytes []byte
 	bytes, err = packet.Marshal(&tree)
 	if err == nil {
-		err = conf.dstor.Put(keyForPeer(peerID), bytes)
+		err = conf.dstor.Put(keyForPeer(name, peerID), bytes)
 	}
 	return
 }
@@ -547,19 +548,19 @@ func (tree CidTree) encode() (enc *encodedCidTree) {
 	return &encodedCidTree{nodes, fileNodes}
 }
 
-func (enc *encodedCidTree) decode() (tree *CidTree, err error) {
-	tree = NewCidTree(len(enc.fileNodes))
-	for name, cidBytes := range enc.nodes {
+func (tree *encodedCidTree) decode() (baseTree *CidTree, err error) {
+	baseTree = NewCidTree(len(tree.fileNodes))
+	for name, cidBytes := range tree.nodes {
 		var aCid cid.Cid
 		aCid, err = cid.Cast(cidBytes)
 		if err != nil {return}
-		tree.Nodes[name] = aCid
+		baseTree.Nodes[name] = aCid
 	}
-	for i, cidBytes := range enc.fileNodes {
+	for i, cidBytes := range tree.fileNodes {
 		var aCid cid.Cid
 		aCid, err = cid.Cast(cidBytes)
 		if err != nil {return}
-		tree.FileNodes[i] = aCid
+		baseTree.FileNodes[i] = aCid
 	}
 	return
 }
@@ -653,7 +654,12 @@ func (con connection) write(msg message) (err error) {
 	return
 }
 
-func (con connection) streamError(id uint64, err error) {
+func (con connection) getTree(id uint64, name string) (*CidTree, error) {
+	if conf.myTrees[name] == nil {return nil, con.streamError(id, fmt.Errorf("No tree named %s", name))}
+	return conf.myTrees[name], nil
+}
+
+func (con connection) streamError(id uint64, err error) error {
 	err = con.write(&msgError{msgBase{id}, err.Error()})
 	if err == nil {
 		err = con.stream.Close()
@@ -661,31 +667,35 @@ func (con connection) streamError(id uint64, err error) {
 	if err != nil {
 		fmt.Printf("%v", err)
 	}
+	return err
 }
 
 //SetTree set my tree to root, root must name a unixfs node
-func SetTree(root cid.Cid) error {
-	conf.myTree.init(0)
-	err := conf.myTree.findNodes("", root, false)
+func SetTree(name string, root cid.Cid) error {
+	tree := &CidTree{}
+	conf.myTrees[name] = tree
+	tree.init(0)
+	err := tree.findNodes("/", root, false)
 	if err != nil {return fmt.Errorf("Error finding nodes from root %v: %w", root, err)}
-	err = conf.myTree.encode().storeTree(conf.host.ID())
+	err = tree.encode().storeTree(name, conf.host.ID())
 	if err != nil {return fmt.Errorf("Error storing tree %v: %w", root, err)}
 	return nil
 }
 
-func (tree CidTree) findNodes(path string, aCid cid.Cid, file bool) error {
+func (tree CidTree) findNodes(urlPath string, aCid cid.Cid, file bool) error {
 	node, err := fetchNode(aCid)
 	if err != nil {return err}
 	if !file {
-		//fmt.Printf("Fetching node: %s: %s\n", path, aCid)
-		tree.Nodes[path] = node.Cid()
+		urlPath = path.Clean("/" + urlPath)
+		fmt.Printf("Fetching node: %s: %s\n", urlPath, aCid)
+		tree.Nodes[urlPath] = node.Cid()
 		fsnode, err := unixfs.ExtractFSNode(node) // extract fs node to check if it's a directory
 		if err != nil {return err}
 		if fsnode.IsDir() {
-			path += "/"
+			urlPath += "/"
 			for _, link := range node.Links() {
 				if link.Name != "" {
-					err := tree.findNodes(path+link.Name, link.Cid, false)
+					err := tree.findNodes(urlPath+link.Name, link.Cid, false)
 					if err != nil {return err}
 				}
 			}
@@ -693,13 +703,9 @@ func (tree CidTree) findNodes(path string, aCid cid.Cid, file bool) error {
 			file = true
 		}
 	} else {
-		//fmt.Printf("Fetching node for file: %s\n", aCid)
 		tree.FileNodes = append(tree.FileNodes, node.Cid())
 	}
 	if file {
-		//if len(node.Links()) > 0 {
-		//	fmt.Printf("Fetching file subnodes\n")
-		//}
 		for _, link := range node.Links() {
 			if link.Name != "" {
 				err := tree.findNodes("", link.Cid, true)
@@ -712,18 +718,12 @@ func (tree CidTree) findNodes(path string, aCid cid.Cid, file bool) error {
 
 func fetchNode(aCid cid.Cid) (node ipld.Node, err error) {
 	var block blocks.Block
-	//fmt.Printf("Retrieving block from storage: %s\n", aCid)
 	block, err = conf.bstor.Get(aCid)
 	if err == nil {
 		node, err = ipld.Decode(block)
 	} else if err == blockstore.ErrNotFound {
-		//fmt.Printf("Not in storage, fetching from dag...\n", aCid)
 		node, err = conf.dag.Get(context.Background(), aCid)
 	}
-	if err != nil {
-		//fmt.Printf("Error fetching block: %s", err.Error())
-		return nil, err
-	}
-	//fmt.Printf("\n!!!!!! node: %#v\n\n", node)
+	if err != nil {return nil, err}
 	return
 }
