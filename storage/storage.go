@@ -22,6 +22,7 @@
  *
  */
 
+//Package storage convenience wrapper around mfs
 package storage
 
 import (
@@ -73,7 +74,7 @@ func StoreFile(root *mfs.Root, filepath string, contents []byte) *errors.Error {
 			if _, err = dir.Child(childName); err == nil {
 				fmt.Printf("removing old file %s/%s\n", parentName, childName)
 				err = dir.Unlink(childName)
-				if err != nil {return errors.New(fmt.Errorf("Couldn't remove old directory entry for %v: %w", filepath, err))}
+				if err != nil {return errors.New(fmt.Errorf("couldn't remove old directory entry for %v: %w", filepath, err))}
 			}
 		} else {
 			return errors.New("parent is not a directory")
@@ -127,12 +128,14 @@ func GetFileStreamForBlock(urlPath string, block blocks.Block, dag ipld.DAGServi
 		fmt.Println("Geting parent of", urlPath)
 		parent := path.Dir(urlPath)
 		builder := new(strings.Builder)
+		builder.WriteString("<html><body>")
 		if path.Dir(parent) != "/" {
 			builder.WriteString(fmt.Sprintf("<a href='/peer%s'>[PARENT DIRECTORY]</a><br>", path.Dir(urlPath)))
 		}
 		for _, link := range node.Links() {
 			builder.WriteString(fmt.Sprintf("<a href='/peer%s/%s'>%s</a><br>", urlPath, link.Name, link.Name))
 		}
+		builder.WriteString("</body></html>")
 		return strings.NewReader(builder.String()), nil
 	}
 	fmt.Println("Links:")
