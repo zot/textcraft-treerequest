@@ -745,10 +745,10 @@ github.com/whyrusleeping/timecache v0.0.0-20160911033111-cfcb2f1abfee/go.mod h1:
 github.com/x-cray/logrus-prefixed-formatter v0.5.2/go.mod h1:2duySbKsL6M18s5GU7VPsoEPHyzalCE06qoARUCeBBE=
 github.com/xordataexchange/crypt v0.0.3-0.20170626215501-b2862e3d0a77/go.mod h1:aYKd//L2LvnjZzWKhF00oedf4jCCReLcmhLdhm1A27Q=
 github.com/yuin/goldmark v1.1.32/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
-github.com/zot/textcraft-packet v0.0.0-20200725160545-e6b36b354de1 h1:Citt+bLknQeq0Esg3y+WCFQSzBcxGraaQl9wRKMsqWs=
-github.com/zot/textcraft-packet v0.0.0-20200725160545-e6b36b354de1/go.mod h1:KCZBIqAxyR+aGfRM/czhs+9k4jVn7CH4H3eUZTfBFpw=
 github.com/zot/textcraft-treerequest/storage v0.0.0-20200820162952-807f7f015429 h1:VFms2inRrxp60Lmp4HilUH1+XbWrJ3C3y0J+otucSmU=
 github.com/zot/textcraft-treerequest/storage v0.0.0-20200820162952-807f7f015429/go.mod h1:U87B0378EqDIFZYEL08ZLYPkSHl4p7tHBfKJ3xttgN4=
+go.mozilla.org/pkcs7 v0.0.0-20200128120323-432b2356ecb1 h1:A/5uWzF44DlIgdm/PQFwfMkW0JX+cIcQi/SwLAmZP5M=
+go.mozilla.org/pkcs7 v0.0.0-20200128120323-432b2356ecb1/go.mod h1:SNgMg+EgDFwmvSmLRTNKC5fegJjB7v23qTQ0XLGUNHk=
 go.opencensus.io v0.18.0/go.mod h1:vKdFvxhtzZ9onBp9VKHK8z/sRpBMnKAsufL7wlDrCOA=
 go.opencensus.io v0.21.0/go.mod h1:mSImk1erAIZhrmZN+AvHh14ztQfjbGwt4TtuofqLduU=
 go.opencensus.io v0.22.1/go.mod h1:Ap50jQcDJrx6rB6VgeeFPtuPIf3wMRvRfrfYDO6+BmA=

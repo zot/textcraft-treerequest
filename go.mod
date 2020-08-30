@@ -21,10 +21,12 @@ require (
 	github.com/libp2p/go-libp2p-core v0.5.7
 	github.com/libp2p/go-libp2p-quic-transport v0.6.0 // indirect
 	github.com/libp2p/go-libp2p-record v0.1.3 // indirect
+	github.com/mr-tron/base58 v1.1.3
+	github.com/multiformats/go-multiaddr v0.2.2
 	github.com/smartystreets/goconvey v0.0.0-20190710185942-9d28bd7c0945 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.0.0-beta.1
-	github.com/zot/textcraft-packet v0.0.0-20200725160545-e6b36b354de1
 	github.com/zot/textcraft-treerequest/storage v0.0.0-20200820162952-807f7f015429
+	go.mozilla.org/pkcs7 v0.0.0-20200128120323-432b2356ecb1
 	golang.org/x/lint v0.0.0-20200302205851-738671d3881b // indirect
 	golang.org/x/sys v0.0.0-20200523222454-059865788121 // indirect
 	golang.org/x/text v0.3.3 // indirect
