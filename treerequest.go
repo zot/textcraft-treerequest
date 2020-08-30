@@ -61,7 +61,6 @@ package treerequest
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/binary"
